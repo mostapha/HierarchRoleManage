@@ -28,7 +28,7 @@ const SPECIAL_ROLES_IDS = [
 ];
 
 const TOP_COUNT = 30;
-const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * 30;
+const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * 60;
 
 // Grace period: how many weeks someone can stay out of qualification before losing role
 const GRACE_PERIOD_WEEKS = 4;
