@@ -221,14 +221,10 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
     graceTracking = JSON.parse(fs.readFileSync(GRACE_FILE, 'utf8'));
   }
 
-  // Create sets of users who should have Hierarch
-  const shouldHaveHierarch = new Set();
-  
-  // Add top 30 regular members
-  top30Regular.forEach(u => shouldHaveHierarch.add(u.userId));
-  
-  // Add active special role members
-  activeSpecialRoles.forEach(u => shouldHaveHierarch.add(u.userId));
+  // Track who is currently active (for clearing grace)
+  const activeUsers = new Set();
+  top30Regular.forEach(u => activeUsers.add(u.userId));
+  activeSpecialRoles.forEach(u => activeUsers.add(u.userId));
   
   // Log top 30 regular members
   console.log('\n  📊 Top 30 Regular Members:');
@@ -265,16 +261,15 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
 
   console.log('\n  🔄 Role Changes:');
 
-  // Add role to those who should have it but don't
-  const allWhoShouldHave = [...top30Regular, ...activeSpecialRoles];
-  for (const user of allWhoShouldHave) {
-    // Clear grace tracking if they're active
+  // Add role ONLY to top 30 regular members who don't have it
+  for (const user of top30Regular) {
+    // Clear grace tracking if they're in top 30
     if (graceTracking[user.userId]) {
       delete graceTracking[user.userId];
     }
     
     if (!user.member.roles.cache.has(HIERARCH_ROLE_ID)) {
-      await user.member.roles.add(HIERARCH_ROLE_ID);
+      // await user.member.roles.add(HIERARCH_ROLE_ID);
       console.log(`    ✅ Added role to: ${user.username}`);
       logData.rolesAdded.push({
         username: user.username,
@@ -284,12 +279,16 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
     }
   }
 
-  console.log('shouldHaveHierarch', shouldHaveHierarch);
-  
+  // Clear grace for active special roles (they keep existing Hierarch if they have it)
+  for (const user of activeSpecialRoles) {
+    if (graceTracking[user.userId]) {
+      delete graceTracking[user.userId];
+    }
+  }
 
-  // Handle users who have the role but shouldn't
+  // Handle users who have the role but aren't active
   for (const [memberId] of hierarchRole.members) {
-    if (!shouldHaveHierarch.has(memberId)) {
+    if (!activeUsers.has(memberId)) {
       try {
         const member = await guild.members.fetch(memberId);
         const username = member.nickname || member.user.username;
@@ -330,7 +329,7 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
             
             if (weeksOut > GRACE_PERIOD_WEEKS) {
               // Grace period expired, remove role
-              await member.roles.remove(HIERARCH_ROLE_ID);
+              // await member.roles.remove(HIERARCH_ROLE_ID);
               console.log(`    ❌ Removed role from: ${username} (grace period expired)`);
               logData.rolesRemoved.push({
                 username,
@@ -351,12 +350,12 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
           }
         } else {
           // No grace period, remove immediately
-          await member.roles.remove(HIERARCH_ROLE_ID);
+          // await member.roles.remove(HIERARCH_ROLE_ID);
           console.log(`    ❌ Removed role from: ${username}`);
           logData.rolesRemoved.push({
             username,
             userId: memberId,
-            reason: 'Not in top 30 or active special roles'
+            reason: 'Not in top 30'
           });
         }
       } catch (err) {
