@@ -1,0 +1,5 @@
+node_modules/
+.env
+role-logs/
+*.log
+grace-tracking.json

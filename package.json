@@ -1,0 +1,18 @@
+{
+  "name": "discord-role-automation",
+  "version": "1.0.0",
+  "description": "Automated Discord role management based on activity",
+  "type": "module",
+  "main": "role-manager.js",
+  "scripts": {
+    "start": "node role-manager.js",
+    "test": "node role-manager.js"
+  },
+  "keywords": ["discord", "bot", "automation"],
+  "author": "Highland",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1"
+  }
+}
