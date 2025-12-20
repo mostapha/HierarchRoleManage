@@ -269,7 +269,7 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
     }
     
     if (!user.member.roles.cache.has(HIERARCH_ROLE_ID)) {
-      // await user.member.roles.add(HIERARCH_ROLE_ID);
+      await user.member.roles.add(HIERARCH_ROLE_ID);
       console.log(`    ✅ Added role to: ${user.username}`);
       logData.rolesAdded.push({
         username: user.username,
@@ -329,7 +329,7 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
             
             if (weeksOut > GRACE_PERIOD_WEEKS) {
               // Grace period expired, remove role
-              // await member.roles.remove(HIERARCH_ROLE_ID);
+              await member.roles.remove(HIERARCH_ROLE_ID);
               console.log(`    ❌ Removed role from: ${username} (grace period expired)`);
               logData.rolesRemoved.push({
                 username,
@@ -350,7 +350,7 @@ async function manageRoles(guild, top30Regular, activeSpecialRoles) {
           }
         } else {
           // No grace period, remove immediately
-          // await member.roles.remove(HIERARCH_ROLE_ID);
+          await member.roles.remove(HIERARCH_ROLE_ID);
           console.log(`    ❌ Removed role from: ${username}`);
           logData.rolesRemoved.push({
             username,
