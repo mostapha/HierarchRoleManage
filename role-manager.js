@@ -22,7 +22,7 @@ const PROTECTED_ROLES_IDS = process.env.PROTECTED_ROLES_IDS.split(',')
 const SPECIAL_ROLES_IDS = process.env.SPECIAL_ROLES_IDS.split(',')
 
 const TOP_COUNT = 30;
-const DAYS_WE_CHECK = 7;
+const DAYS_WE_CHECK = 60;
 const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * DAYS_WE_CHECK;
 
 // Grace period: how many weeks someone can stay out of qualification before losing role
@@ -290,7 +290,7 @@ async function manageRoles(guild, qualified) {
     }
 
     if (!user.member.roles.cache.has(HIERARCH_ROLE_ID)) {
-      // await user.member.roles.add(HIERARCH_ROLE_ID);
+      await user.member.roles.add(HIERARCH_ROLE_ID);
       console.log(`    ✅ Added role to: ${user.username}`);
       logData.rolesAdded.push({
         username: user.username,
@@ -337,7 +337,7 @@ async function manageRoles(guild, qualified) {
             const weeksOut = graceTracking[memberId].weeksOut;
 
             if (weeksOut > GRACE_PERIOD_WEEKS) {
-              // await member.roles.remove(HIERARCH_ROLE_ID);
+              await member.roles.remove(HIERARCH_ROLE_ID);
               console.log(`    ❌ Removed role from: ${username} (grace period expired)`);
               logData.rolesRemoved.push({
                 username,
@@ -357,7 +357,7 @@ async function manageRoles(guild, qualified) {
             }
           }
         } else {
-          // await member.roles.remove(HIERARCH_ROLE_ID);
+          await member.roles.remove(HIERARCH_ROLE_ID);
           console.log(`    ❌ Removed role from: ${username}`);
           logData.rolesRemoved.push({
             username,
