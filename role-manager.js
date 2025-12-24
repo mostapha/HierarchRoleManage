@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { config } from 'dotenv';
@@ -7,28 +7,23 @@ config();
 
 // Configuration
 const TOKEN = process.env.BOT_TOKEN;
-const GUILD_ID = '1247740449959968870';
-const CHANNELS_IDS = ['1274705683283054652', '1280884277420228640', '1247901833188478996'];
+const SUMMARY_CHANNEL_ID = process.env.SUMMARY_CHANNEL_ID;
+const GUILD_ID = process.env.GUILD_ID;
+const CHANNELS_IDS = process.env.CHANNELS_IDS.split(',')
 
 // Role Configuration
-const HIERARCH_ROLE_ID = '1449883199722229890';
-const MEMBER_ROLE_ID = '1338515855709044757';
+const HIERARCH_ROLE_ID = process.env.HIERARCH_ROLE_ID;
+const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID;
 
 // Protected roles: Never touched by automation, always keep Hierarch
-const PROTECTED_ROLES_IDS = [
-  '1247895646929817730', // highlord
-];
+const PROTECTED_ROLES_IDS = process.env.PROTECTED_ROLES_IDS.split(',')
 
 // Special roles: Don't compete for top 30 spots, but get Hierarch if they're top 30 caliber
-const SPECIAL_ROLES_IDS = [
-  '1265029315532161176', // chieftain
-  '1247902423453007934', // shotcaller
-  '1247902000847523912', // pt leader
-  '1336680493252481037', // pt leader trial
-];
+const SPECIAL_ROLES_IDS = process.env.SPECIAL_ROLES_IDS.split(',')
 
 const TOP_COUNT = 30;
-const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * 60;
+const DAYS_WE_CHECK = 7;
+const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * DAYS_WE_CHECK;
 
 // Grace period: how many weeks someone can stay out of qualification before losing role
 const GRACE_PERIOD_WEEKS = 2;
@@ -65,7 +60,12 @@ client.once('ready', async () => {
     const qualified = determineQualified(regularMembers, specialMembers, protectedMembers);
     
     console.log('\nStep 4: Managing roles...');
-    await manageRoles(guild, qualified);
+    // Capture the logData returned from manageRoles (we need to modify manageRoles slightly to return this)
+    const logData = await manageRoles(guild, qualified);
+    
+    // NEW: Send the log to Discord
+    console.log('\nStep 5: Sending summary to Discord...');
+    await sendSummaryToDiscord(guild, logData);
     
     console.log('\n✅ Role update completed successfully!');
     process.exit(0);
@@ -290,7 +290,7 @@ async function manageRoles(guild, qualified) {
     }
 
     if (!user.member.roles.cache.has(HIERARCH_ROLE_ID)) {
-      await user.member.roles.add(HIERARCH_ROLE_ID);
+      // await user.member.roles.add(HIERARCH_ROLE_ID);
       console.log(`    ✅ Added role to: ${user.username}`);
       logData.rolesAdded.push({
         username: user.username,
@@ -337,7 +337,7 @@ async function manageRoles(guild, qualified) {
             const weeksOut = graceTracking[memberId].weeksOut;
 
             if (weeksOut > GRACE_PERIOD_WEEKS) {
-              await member.roles.remove(HIERARCH_ROLE_ID);
+              // await member.roles.remove(HIERARCH_ROLE_ID);
               console.log(`    ❌ Removed role from: ${username} (grace period expired)`);
               logData.rolesRemoved.push({
                 username,
@@ -357,7 +357,7 @@ async function manageRoles(guild, qualified) {
             }
           }
         } else {
-          await member.roles.remove(HIERARCH_ROLE_ID);
+          // await member.roles.remove(HIERARCH_ROLE_ID);
           console.log(`    ❌ Removed role from: ${username}`);
           logData.rolesRemoved.push({
             username,
@@ -443,6 +443,93 @@ async function manageRoles(guild, qualified) {
   console.log(`     - Detailed JSON: ${logFileName}`);
   console.log(`     - Latest Summary: latest-summary.txt`);
   console.log(`     - History Summary: ${historySummaryFileName}`);
+
+  // ADD THIS at the very end of the function
+  return logData;
+}
+
+async function sendSummaryToDiscord(guild, logData) {
+  try {
+    const channel = await guild.channels.fetch(SUMMARY_CHANNEL_ID);
+    if (!channel || !channel.isTextBased()) {
+      console.error('  ⚠️  Summary channel not found or not text-based.');
+      return;
+    }
+
+    // Helper to format a list of users
+    const formatList = (users) => {
+      if (!users || users.length === 0) return null;
+      return users.map(u => `- <@${u.userId}>`).join('\n');
+    };
+
+    let rosterMsg = `# Summary of Attendance\nBased on people who signed up in Yeek threads last ${DAYS_WE_CHECK} days\n`;
+
+    // 1. Construct the "Current Roster" message
+    rosterMsg += `## Top 30 Members\n${formatList(logData.top30)}\n`;
+
+    if (logData.specialRoles.length > 0 || logData.protected.length > 0) {
+      rosterMsg += `## Top 30 With Special Roles\n${formatList(
+        (logData.protected||[]).concat((logData.specialRoles||[]))
+      )}\n`;
+    }
+
+    // 2. Construct the "Changes" message
+    let changesMsg = `# Hierarch Role Changes Update\n`;
+    let hasChanges = false;
+
+    if (logData.rolesAdded.length > 0) {
+      changesMsg += `## Role Added\n${formatList(logData.rolesAdded)}\n`;
+      hasChanges = true;
+    }
+
+    if (logData.rolesRemoved.length > 0) {
+      // For removed, we show the reason too, or just the tag if you prefer
+      changesMsg += `## Role Removed\n${logData.rolesRemoved.map(u => `- <@${u.userId}> (${u.reason})`).join('\n')}\n`;
+      hasChanges = true;
+    }
+
+    if (logData.graceUsers.length > 0) {
+      changesMsg += `## Grace Period Active\n${logData.graceUsers.map(u => `- <@${u.userId}> (${u.weeksOut}/${GRACE_PERIOD_WEEKS} weeks)`).join('\n')}\n`;
+      hasChanges = true;
+    }
+
+    if (!hasChanges) {
+      changesMsg += `- No role changes this week.`;
+    }
+
+    // Send messages (splitting if they are too long)
+    // Discord limit is 2000 chars. We use a simple split strategy here.
+    
+    // const sendSafe = async (content) => {
+    //   if (content.length < 2000) {
+    //     await channel.send(content);
+    //   } else {
+    //     // Simple chunking by newline if message is huge
+    //     const chunks = content.match(/[\s\S]{1,1900}(?=\n|$)/g) || [];
+    //     for (const chunk of chunks) {
+    //       await channel.send(chunk);
+    //     }
+    //   }
+    // };
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFEFE92)
+      .setDescription(
+        `${rosterMsg + changesMsg}`
+      )
+
+    await channel.send({
+      embeds: [embed],
+    });
+
+    // await sendSafe(rosterMsg);
+    // await sendSafe(changesMsg);
+
+    console.log('  ✅ Discord summary sent.');
+
+  } catch (err) {
+    console.error('  ❌ Failed to send Discord summary:', err);
+  }
 }
 
 client.login(TOKEN).catch(err => {
