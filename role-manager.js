@@ -109,9 +109,35 @@ async function scanChannelsForMentions(guild) {
           break;
         }
 
+        // --- NEW LOGIC START ---
+        // Use a Set to ensure we don't double-count a user if they are mentioned 
+        // in both content and embed, or mentioned multiple times in the same list.
+        const uniqueUsersInMessage = new Set();
+
+        // 1. Check Standard Content (mentions)
         for (const user of message.mentions.users.values()) {
-          mentionCount.set(user.id, (mentionCount.get(user.id) || 0) + 1);
+          uniqueUsersInMessage.add(user.id);
         }
+
+        // 2. Check Embed Descriptions (regex scan)
+        if (message.embeds.length > 0) {
+          for (const embed of message.embeds) {
+            if (embed.description) {
+              // Regex to find <@123456789> or <@!123456789>
+              const matches = embed.description.matchAll(/<@!?(\d+)>/g);
+              for (const match of matches) {
+                // match[1] is the ID
+                uniqueUsersInMessage.add(match[1]);
+              }
+            }
+          }
+        }
+
+        // 3. Update the global count
+        for (const userId of uniqueUsersInMessage) {
+          mentionCount.set(userId, (mentionCount.get(userId) || 0) + 1);
+        }
+        // --- NEW LOGIC END ---
       }
 
       if (Date.now() - messages.last().createdTimestamp > TWO_MONTHS_MS) break;
