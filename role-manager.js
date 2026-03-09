@@ -21,15 +21,11 @@ const PROTECTED_ROLES_IDS = process.env.PROTECTED_ROLES_IDS.split(',')
 // Special roles: Don't compete for top 30 spots, but get Hierarch if they're top 30 caliber
 const SPECIAL_ROLES_IDS = process.env.SPECIAL_ROLES_IDS.split(',')
 
-const TOP_COUNT = 30;
+const TOP_COUNT = 40;
 const DAYS_WE_CHECK = 60;
 const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * DAYS_WE_CHECK;
 
-// Grace period: how many weeks someone can stay out of qualification before losing role
-const GRACE_PERIOD_WEEKS = 2;
-
 const LOGS_DIR = './role-logs';
-const GRACE_FILE = path.join(LOGS_DIR, 'grace-tracking.json');
 
 const client = new Client({
   intents: [
@@ -201,15 +197,15 @@ async function categorizeMembers(guild, mentionCount) {
 }
 
 function determineQualified(regularMembers, specialMembers, protectedMembers) {
-  // Top 30 regular members always qualify
-  const top30Regular = regularMembers.slice(0, TOP_COUNT);
+  // Top regular members always qualify
+  const topRegular = regularMembers.slice(0, TOP_COUNT);
   
-  // Get the threshold: mentions needed to be in top 30
-  const threshold = top30Regular.length > 0 
-    ? top30Regular[top30Regular.length - 1].mentionCount 
+  // Get the threshold: mentions needed to be in the top list
+  const threshold = topRegular.length > 0 
+    ? topRegular[topRegular.length - 1].mentionCount 
     : 0;
 
-  console.log(`  Top 30 threshold: ${threshold} mentions`);
+  console.log(`  Top ${TOP_COUNT} threshold: ${threshold} mentions`);
 
   // Special members qualify if they beat the threshold (not tie)
   const qualifiedSpecial = specialMembers.filter(m => m.mentionCount > threshold);
@@ -217,13 +213,13 @@ function determineQualified(regularMembers, specialMembers, protectedMembers) {
   // Protected members always qualify (they were mentioned)
   const qualifiedProtected = protectedMembers;
 
-  console.log(`  Qualified regular members: ${top30Regular.length}`);
+  console.log(`  Qualified regular members: ${topRegular.length}`);
   console.log(`  Qualified special members: ${qualifiedSpecial.length}`);
   console.log(`  Protected members: ${qualifiedProtected.length}`);
-  console.log(`  Total qualified for Hierarch: ${top30Regular.length + qualifiedSpecial.length + qualifiedProtected.length}`);
+  console.log(`  Total qualified for Hierarch: ${topRegular.length + qualifiedSpecial.length + qualifiedProtected.length}`);
 
   return {
-    top30Regular,
+    topRegular,
     qualifiedSpecial,
     qualifiedProtected,
     threshold
@@ -234,39 +230,31 @@ async function manageRoles(guild, qualified) {
   const timestamp = new Date().toISOString();
   const logData = {
     timestamp,
-    top30: [],
+    top40: [],
     specialRoles: [],
     protected: [],
     rolesAdded: [],
-    rolesRemoved: [],
-    graceUsers: []
+    rolesRemoved: []
   };
-
-  // Load grace tracking
-  let graceTracking = {};
-  if (fs.existsSync(GRACE_FILE)) {
-    graceTracking = JSON.parse(fs.readFileSync(GRACE_FILE, 'utf8'));
-  }
 
   // Build set of all qualified user IDs
   const qualifiedUserIds = new Set();
-  qualified.top30Regular.forEach(u => qualifiedUserIds.add(u.userId));
+  qualified.topRegular.forEach(u => qualifiedUserIds.add(u.userId));
   qualified.qualifiedSpecial.forEach(u => qualifiedUserIds.add(u.userId));
   qualified.qualifiedProtected.forEach(u => qualifiedUserIds.add(u.userId));
 
-  // Log top 30 regular members
-  console.log('\n  📊 Top 30 Regular Members:');
-  for (let i = 0; i < qualified.top30Regular.length; i++) {
-    const user = qualified.top30Regular[i];
+  // Log top regular members
+  console.log(`\n  📊 Top ${TOP_COUNT} Regular Members:`);
+  for (let i = 0; i < qualified.topRegular.length; i++) {
+    const user = qualified.topRegular[i];
     console.log(`    ${i + 1}. ${user.username} - ${user.mentionCount} mentions`);
-    logData.top30.push({
+    logData.top40.push({
       rank: i + 1,
       username: user.username,
       userId: user.userId,
       mentions: user.mentionCount
     });
   }
-
   // Log qualified special roles
   if (qualified.qualifiedSpecial.length > 0) {
     console.log('\n  ⭐ Qualified Special Role Members (beat threshold):');
@@ -279,7 +267,6 @@ async function manageRoles(guild, qualified) {
       });
     });
   }
-
   // Log protected members
   if (qualified.qualifiedProtected.length > 0) {
     console.log('\n  🛡️  Protected Members (always keep):');
@@ -292,29 +279,21 @@ async function manageRoles(guild, qualified) {
       });
     });
   }
-
   // Fetch Hierarch role
   const hierarchRole = await guild.roles.fetch(HIERARCH_ROLE_ID);
   if (!hierarchRole) {
     console.error('  ❌ Hierarch role not found!');
     return;
   }
-
   console.log('\n  🔄 Role Changes:');
 
   // Add role to all qualified members
   const allQualified = [
-    ...qualified.top30Regular,
+    ...qualified.topRegular,
     ...qualified.qualifiedSpecial,
     ...qualified.qualifiedProtected
   ];
-
   for (const user of allQualified) {
-    // Clear grace tracking if they're qualified
-    if (graceTracking[user.userId]) {
-      delete graceTracking[user.userId];
-    }
-
     if (!user.member.roles.cache.has(HIERARCH_ROLE_ID)) {
       await user.member.roles.add(HIERARCH_ROLE_ID);
       console.log(`    ✅ Added role to: ${user.username}`);
@@ -325,96 +304,47 @@ async function manageRoles(guild, qualified) {
       });
     }
   }
-
   // Handle users who have the role but don't qualify
   for (const [memberId] of hierarchRole.members) {
     if (!qualifiedUserIds.has(memberId)) {
       try {
         const member = await guild.members.fetch(memberId);
         const username = member.nickname || member.user.username;
-
         // Check if user has protected roles - never remove
         const hasProtectedRole = member.roles.cache.some(role => 
           PROTECTED_ROLES_IDS.includes(role.id)
         );
-
         if (hasProtectedRole) {
           console.log(`    🛡️  Skipping protected user: ${username}`);
           continue;
         }
 
-        // Grace period logic
-        if (GRACE_PERIOD_WEEKS > 0) {
-          if (!graceTracking[memberId]) {
-            graceTracking[memberId] = {
-              username,
-              weeksOut: 1,
-              firstWeekOut: timestamp
-            };
-            console.log(`    ⏳ Grace period started for: ${username} (1/${GRACE_PERIOD_WEEKS} weeks)`);
-            logData.graceUsers.push({
-              username,
-              userId: memberId,
-              weeksOut: 1,
-              weeksRemaining: GRACE_PERIOD_WEEKS - 1
-            });
-          } else {
-            graceTracking[memberId].weeksOut++;
-            const weeksOut = graceTracking[memberId].weeksOut;
-
-            if (weeksOut > GRACE_PERIOD_WEEKS) {
-              await member.roles.remove(HIERARCH_ROLE_ID);
-              console.log(`    ❌ Removed role from: ${username} (grace period expired)`);
-              logData.rolesRemoved.push({
-                username,
-                userId: memberId,
-                reason: 'Grace period expired',
-                weeksOut
-              });
-              delete graceTracking[memberId];
-            } else {
-              console.log(`    ⏳ Grace period continues for: ${username} (${weeksOut}/${GRACE_PERIOD_WEEKS} weeks)`);
-              logData.graceUsers.push({
-                username,
-                userId: memberId,
-                weeksOut,
-                weeksRemaining: GRACE_PERIOD_WEEKS - weeksOut
-              });
-            }
-          }
-        } else {
-          await member.roles.remove(HIERARCH_ROLE_ID);
-          console.log(`    ❌ Removed role from: ${username}`);
-          logData.rolesRemoved.push({
-            username,
-            userId: memberId,
-            reason: 'Not qualified'
-          });
-        }
+        await member.roles.remove(HIERARCH_ROLE_ID);
+        console.log(`    ❌ Removed role from: ${username}`);
+        logData.rolesRemoved.push({
+          username,
+          userId: memberId,
+          reason: 'Not qualified'
+        });
       } catch (err) {
         console.log(`  ⚠️  Could not fetch member ${memberId}: ${err.message}`);
       }
     }
   }
 
-  // Save grace tracking
-  fs.writeFileSync(GRACE_FILE, JSON.stringify(graceTracking, null, 2), 'utf8');
-
   // Save detailed log
   const logFileName = `role-update-${new Date().toISOString().split('T')[0]}.json`;
   const logPath = path.join(LOGS_DIR, logFileName);
   fs.writeFileSync(logPath, JSON.stringify(logData, null, 2), 'utf8');
-
   // Create human-readable summary
   const summaryLines = [
     `Role Update Summary - ${new Date().toLocaleString()}`,
     `${'='.repeat(60)}`,
     '',
-    `📊 TOP 30 REGULAR MEMBERS:`,
-    ...logData.top30.map(u => `  ${u.rank}. ${u.username} - ${u.mentions} mentions`),
+    `📊 TOP ${TOP_COUNT} REGULAR MEMBERS:`,
+    ...logData.top40.map(u => `  ${u.rank}. ${u.username} - ${u.mentions} mentions`),
     ''
   ];
-
   if (logData.specialRoles.length > 0) {
     summaryLines.push(
       `⭐ QUALIFIED SPECIAL ROLE MEMBERS (${logData.specialRoles.length}):`,
@@ -422,7 +352,6 @@ async function manageRoles(guild, qualified) {
       ''
     );
   }
-
   if (logData.protected.length > 0) {
     summaryLines.push(
       `🛡️  PROTECTED MEMBERS (${logData.protected.length}):`,
@@ -430,7 +359,6 @@ async function manageRoles(guild, qualified) {
       ''
     );
   }
-
   summaryLines.push(
     `✅ ROLES ADDED (${logData.rolesAdded.length}):`,
     ...(logData.rolesAdded.length > 0 
@@ -443,24 +371,11 @@ async function manageRoles(guild, qualified) {
       : ['  None']),
     ''
   );
-
-  if (GRACE_PERIOD_WEEKS > 0 && logData.graceUsers.length > 0) {
-    summaryLines.push(
-      `⏳ USERS IN GRACE PERIOD (${logData.graceUsers.length}):`,
-      ...logData.graceUsers.map(u => 
-        `  ~ ${u.username} (${u.weeksOut}/${GRACE_PERIOD_WEEKS} weeks, ${u.weeksRemaining} remaining)`
-      ),
-      ''
-    );
-  }
-
   summaryLines.push(
-    `📈 TOTAL WITH HIERARCH: ${logData.top30.length + logData.specialRoles.length + logData.protected.length + logData.graceUsers.length}`
+    `📈 TOTAL WITH HIERARCH: ${logData.top40.length + logData.specialRoles.length + logData.protected.length}`
   );
-
   const summaryPath = path.join(LOGS_DIR, 'latest-summary.txt');
   fs.writeFileSync(summaryPath, summaryLines.join('\n'), 'utf8');
-
   const historySummaryFileName = `summary-${new Date().toISOString().split('T')[0]}.txt`;
   const historySummaryPath = path.join(LOGS_DIR, historySummaryFileName);
   fs.writeFileSync(historySummaryPath, summaryLines.join('\n'), 'utf8');
@@ -469,7 +384,6 @@ async function manageRoles(guild, qualified) {
   console.log(`     - Detailed JSON: ${logFileName}`);
   console.log(`     - Latest Summary: latest-summary.txt`);
   console.log(`     - History Summary: ${historySummaryFileName}`);
-
   // ADD THIS at the very end of the function
   return logData;
 }
@@ -488,21 +402,21 @@ async function sendSummaryToDiscord(guild, logData) {
       return users.map(u => `- <@${u.userId}>`).join('\n');
     };
 
-    let rosterMsg = `# Summary of Attendance\nBased on people who signed up in Yeek threads last ${DAYS_WE_CHECK} days\n`;
-
+    let rosterMsg = `# Summary of Attendance\nBased on people who signed up in Yeek threads last ${DAYS_WE_CHECK} days\n`;    
+    
     // 1. Construct the "Current Roster" message
-    rosterMsg += `## Top 30 Members\n${formatList(logData.top30)}\n`;
-
+    rosterMsg += `## Top ${TOP_COUNT} Members\n${formatList(logData.top40)}\n`;
+    
     if (logData.specialRoles.length > 0 || logData.protected.length > 0) {
-      rosterMsg += `## Top 30 With Special Roles\n${formatList(
+      rosterMsg += `## Qualified Special & Protected Roles\n${formatList(
         (logData.protected||[]).concat((logData.specialRoles||[]))
       )}\n`;
     }
-
+    
     // 2. Construct the "Changes" message
     let changesMsg = `# Hierarch Role Changes Update\n`;
     let hasChanges = false;
-
+    
     if (logData.rolesAdded.length > 0) {
       changesMsg += `## Role Added\n${formatList(logData.rolesAdded)}\n`;
       hasChanges = true;
@@ -513,16 +427,10 @@ async function sendSummaryToDiscord(guild, logData) {
       changesMsg += `## Role Removed\n${logData.rolesRemoved.map(u => `- <@${u.userId}> (${u.reason})`).join('\n')}\n`;
       hasChanges = true;
     }
-
-    if (logData.graceUsers.length > 0) {
-      changesMsg += `## Grace Period Active\n${logData.graceUsers.map(u => `- <@${u.userId}> (${u.weeksOut}/${GRACE_PERIOD_WEEKS} weeks)`).join('\n')}\n`;
-      hasChanges = true;
-    }
-
+    
     if (!hasChanges) {
       changesMsg += `- No role changes this week.`;
     }
-
     // Send messages (splitting if they are too long)
     // Discord limit is 2000 chars. We use a simple split strategy here.
     
