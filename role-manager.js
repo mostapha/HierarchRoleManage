@@ -7,24 +7,31 @@ config();
 
 // Configuration
 const TOKEN = process.env.BOT_TOKEN;
+const YEEK_BOT_ID = process.env.YEEK_BOT_ID;
 const SUMMARY_CHANNEL_ID = process.env.SUMMARY_CHANNEL_ID;
 const GUILD_ID = process.env.GUILD_ID;
-const CHANNELS_IDS = process.env.CHANNELS_IDS.split(',')
+const CHANNELS_IDS = process.env.CHANNELS_IDS.split(',');
 
 // Role Configuration
 const HIERARCH_ROLE_ID = process.env.HIERARCH_ROLE_ID;
 const MEMBER_ROLE_ID = process.env.MEMBER_ROLE_ID;
 
 // Protected roles: Never touched by automation, always keep Hierarch
-const PROTECTED_ROLES_IDS = process.env.PROTECTED_ROLES_IDS.split(',')
+const PROTECTED_ROLES_IDS = process.env.PROTECTED_ROLES_IDS.split(',');
 
 // Special roles: Don't compete for top 30 spots, but get Hierarch if they're top 30 caliber
-const SPECIAL_ROLES_IDS = process.env.SPECIAL_ROLES_IDS.split(',')
+const SPECIAL_ROLES_IDS = process.env.SPECIAL_ROLES_IDS.split(',');
 
 const TOP_COUNT = 40;
 const DAYS_WE_CHECK = 60;
 const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * DAYS_WE_CHECK;
 
+const WEEKLY_TOP_3_ROLE_ID = '1485778453394489415';
+const WEEKLY_TOP_10_ROLE_ID = '1485778538459173024';
+const WEEKLY_TOP_25_ROLE_ID = '1485778597397528747';
+
+const SEVEN_DAYS_MS = 1000 * 60 * 60 * 24 * 7;
+        
 const LOGS_DIR = './role-logs';
 
 const client = new Client({
@@ -35,58 +42,63 @@ const client = new Client({
   ]
 });
 
+// MERGED Execution Block
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  console.log(`Starting role update process...\n`);
+  console.log(`Starting execution sequence...\n`);
+
+  if (!fs.existsSync(LOGS_DIR)) {
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+  }
+
+  const guild = await client.guilds.fetch(GUILD_ID); 
+  const args = process.argv.slice(2);
+  const isDaily = args.includes('--daily');
+  const isWeekly = args.includes('--weekly');
 
   try {
-    if (!fs.existsSync(LOGS_DIR)) {
-      fs.mkdirSync(LOGS_DIR, { recursive: true });
+    if (isDaily) {
+      console.log('\n--- Executing Daily 7-Day Run ---');
+      const { weeklyMentionCount } = await scanChannelsForMentions(guild, false);
+      await manageWeeklyRoles(guild, weeklyMentionCount);
+      console.log('\n✅ Daily role update completed successfully!');
+      
+    } else if (isWeekly) {
+      console.log('\n--- Executing Weekly 60-Day Hierarch Run ---');
+      const { mentionCount } = await scanChannelsForMentions(guild, true);
+      const { regularMembers, specialMembers, protectedMembers } = await categorizeMembers(guild, mentionCount);
+      const qualified = determineQualified(regularMembers, specialMembers, protectedMembers);
+      const logData = await manageRoles(guild, qualified);
+      
+      console.log('\nStep 5: Sending summary to Discord...');
+      await sendSummaryToDiscord(guild, logData);
+      console.log('\n✅ Weekly role update completed successfully!');
+      
+    } else {
+      console.log('Error: No valid flag provided. Run with --daily or --weekly');
     }
-
-    const guild = await client.guilds.fetch(GUILD_ID);
-    
-    console.log('Step 1: Scanning channels for mentions...');
-    const mentionCount = await scanChannelsForMentions(guild);
-    
-    console.log('\nStep 2: Processing all members and categorizing...');
-    const { regularMembers, specialMembers, protectedMembers } = await categorizeMembers(guild, mentionCount);
-    
-    console.log('\nStep 3: Determining who qualifies for Hierarch...');
-    const qualified = determineQualified(regularMembers, specialMembers, protectedMembers);
-    
-    console.log('\nStep 4: Managing roles...');
-    // Capture the logData returned from manageRoles (we need to modify manageRoles slightly to return this)
-    const logData = await manageRoles(guild, qualified);
-    
-    // NEW: Send the log to Discord
-    console.log('\nStep 5: Sending summary to Discord...');
-    await sendSummaryToDiscord(guild, logData);
-    
-    console.log('\n✅ Role update completed successfully!');
-    process.exit(0);
-
-  } catch (err) {
-    console.error('❌ Unexpected error:', err);
-    process.exit(1);
+  } catch (error) {
+    console.error('❌ An error occurred during execution:', error);
   }
+
+  // CRITICAL: Shut down the bot so the Linux cron job actually finishes
+  console.log('\nExecution complete. Shutting down process...');
+  process.exit(0); 
 });
 
-async function scanChannelsForMentions(guild) {
+async function scanChannelsForMentions(guild, scanFullHistory = true) {
   const mentionCount = new Map();
+  const weeklyMentionCount = new Map();
   let totalScanned = 0;
+
+  const maxScanLimitMs = scanFullHistory ? TWO_MONTHS_MS : SEVEN_DAYS_MS;
 
   for (const channelId of CHANNELS_IDS) {
     console.log(`  Scanning channel: ${channelId}`);
-    
     const channel = await guild.channels.fetch(channelId);
-    if (!channel || !channel.isTextBased()) {
-      console.log(`  ⚠️  Channel ${channelId} not found or not text-based, skipping...`);
-      continue;
-    }
+    if (!channel || !channel.isTextBased()) continue;
 
     let lastMessageId = null;
-    let channelScanned = 0;
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -97,54 +109,120 @@ async function scanChannelsForMentions(guild) {
       if (messages.size === 0) break;
 
       for (const message of messages.values()) {
-        channelScanned++;
         totalScanned++;
+        
+        // Skip messages not sent by Yeek
+        if (message.author.id !== YEEK_BOT_ID) continue;
 
-        if (Date.now() - message.createdTimestamp > TWO_MONTHS_MS) {
-          console.log(`  Reached time limit. Scanned ${channelScanned} messages.`);
-          break;
+        const ageMs = Date.now() - message.createdTimestamp;
+
+        if (ageMs > maxScanLimitMs) {
+          break; // Stop scanning further back in this channel
         }
 
-        // --- NEW LOGIC START ---
-        // Use a Set to ensure we don't double-count a user if they are mentioned 
-        // in both content and embed, or mentioned multiple times in the same list.
+        const isWeekly = ageMs <= SEVEN_DAYS_MS;
         const uniqueUsersInMessage = new Set();
 
-        // 1. Check Standard Content (mentions)
         for (const user of message.mentions.users.values()) {
           uniqueUsersInMessage.add(user.id);
         }
 
-        // 2. Check Embed Descriptions (regex scan)
         if (message.embeds.length > 0) {
           for (const embed of message.embeds) {
             if (embed.description) {
-              // Regex to find <@123456789> or <@!123456789>
               const matches = embed.description.matchAll(/<@!?(\d+)>/g);
-              for (const match of matches) {
-                // match[1] is the ID
-                uniqueUsersInMessage.add(match[1]);
-              }
+              for (const match of matches) uniqueUsersInMessage.add(match[1]);
             }
           }
         }
 
-        // 3. Update the global count
         for (const userId of uniqueUsersInMessage) {
-          mentionCount.set(userId, (mentionCount.get(userId) || 0) + 1);
+          if (scanFullHistory) {
+            mentionCount.set(userId, (mentionCount.get(userId) || 0) + 1);
+          }
+          if (isWeekly) {
+            weeklyMentionCount.set(userId, (weeklyMentionCount.get(userId) || 0) + 1);
+          }
         }
-        // --- NEW LOGIC END ---
       }
 
-      if (Date.now() - messages.last().createdTimestamp > TWO_MONTHS_MS) break;
+      if (Date.now() - messages.last().createdTimestamp > maxScanLimitMs) break;
       lastMessageId = messages.last().id;
     }
   }
-
   console.log(`  Total messages scanned: ${totalScanned}`);
   console.log(`  Unique users mentioned: ${mentionCount.size}`);
   
-  return mentionCount;
+
+  return { mentionCount, weeklyMentionCount };
+}
+
+async function manageWeeklyRoles(guild, weeklyMentionCount) {
+  const weeklyActive = [];
+
+  // Filter down to valid guild members
+  for (const [userId, count] of weeklyMentionCount.entries()) {
+    try {
+      const member = await guild.members.fetch(userId);
+      if (member.roles.cache.has(MEMBER_ROLE_ID)) {
+        weeklyActive.push({ userId, count, member });
+      }
+    } catch (err) {
+      // User left the server
+    }
+  }
+
+  // Sort highest to lowest mentions
+  weeklyActive.sort((a, b) => b.count - a.count);
+  const totalActive = weeklyActive.length;
+
+  if (totalActive === 0) {
+    console.log('  No weekly activity found.');
+    return;
+  }
+
+  // Hard caps for the top players
+  const cut3 = 3;
+  const cut10 = 10;
+  const cut25 = 25;
+
+  // Start from index 0 for all tiers so roles stack downward
+  const top3Ids = new Set(weeklyActive.slice(0, cut3).map(m => m.userId));
+  const top10Ids = new Set(weeklyActive.slice(0, cut10).map(m => m.userId));
+  const top25Ids = new Set(weeklyActive.slice(0, cut25).map(m => m.userId));
+
+  console.log(`  Weekly Active: ${totalActive} | Top 3: ${top3Ids.size} | Top 10: ${top10Ids.size} | Top 25: ${top25Ids.size}`);
+
+  const roleDefinitions = [
+    { id: WEEKLY_TOP_3_ROLE_ID, validSet: top3Ids, name: 'Top 3' },
+    { id: WEEKLY_TOP_10_ROLE_ID, validSet: top10Ids, name: 'Top 10' },
+    { id: WEEKLY_TOP_25_ROLE_ID, validSet: top25Ids, name: 'Top 25' }
+  ];
+
+  // Apply & Remove Roles
+  for (const def of roleDefinitions) {
+    if (!def.id) continue; 
+
+    const role = await guild.roles.fetch(def.id);
+    if (!role) continue;
+
+    // Strip role from players who dropped out of the bracket
+    for (const [memberId, member] of role.members) {
+      if (!def.validSet.has(memberId)) {
+        await member.roles.remove(def.id);
+        console.log(`    ❌ Removed ${def.name} from: ${member.nickname || member.user.username}`);
+      }
+    }
+
+    // Add role to new rank pushers
+    for (const userId of def.validSet) {
+      const userObj = weeklyActive.find(m => m.userId === userId);
+      if (userObj && !userObj.member.roles.cache.has(def.id)) {
+        await userObj.member.roles.add(def.id);
+        console.log(`    ✅ Added ${def.name} to: ${userObj.member.nickname || userObj.member.user.username}`);
+      }
+    }
+  }
 }
 
 async function categorizeMembers(guild, mentionCount) {
@@ -384,7 +462,7 @@ async function manageRoles(guild, qualified) {
   console.log(`     - Detailed JSON: ${logFileName}`);
   console.log(`     - Latest Summary: latest-summary.txt`);
   console.log(`     - History Summary: ${historySummaryFileName}`);
-  // ADD THIS at the very end of the function
+  
   return logData;
 }
 
@@ -396,7 +474,6 @@ async function sendSummaryToDiscord(guild, logData) {
       return;
     }
 
-    // Helper to format a list of users
     const formatList = (users) => {
       if (!users || users.length === 0) return null;
       return users.map(u => `- <@${u.userId}>`).join('\n');
@@ -404,7 +481,6 @@ async function sendSummaryToDiscord(guild, logData) {
 
     let rosterMsg = `# Summary of Attendance\nBased on people who signed up in Yeek threads last ${DAYS_WE_CHECK} days\n`;    
     
-    // 1. Construct the "Current Roster" message
     rosterMsg += `## Top ${TOP_COUNT} Members\n${formatList(logData.top40)}\n`;
     
     if (logData.specialRoles.length > 0 || logData.protected.length > 0) {
@@ -413,7 +489,6 @@ async function sendSummaryToDiscord(guild, logData) {
       )}\n`;
     }
     
-    // 2. Construct the "Changes" message
     let changesMsg = `# Hierarch Role Changes Update\n`;
     let hasChanges = false;
     
@@ -423,7 +498,6 @@ async function sendSummaryToDiscord(guild, logData) {
     }
 
     if (logData.rolesRemoved.length > 0) {
-      // For removed, we show the reason too, or just the tag if you prefer
       changesMsg += `## Role Removed\n${logData.rolesRemoved.map(u => `- <@${u.userId}> (${u.reason})`).join('\n')}\n`;
       hasChanges = true;
     }
@@ -431,33 +505,16 @@ async function sendSummaryToDiscord(guild, logData) {
     if (!hasChanges) {
       changesMsg += `- No role changes this week.`;
     }
-    // Send messages (splitting if they are too long)
-    // Discord limit is 2000 chars. We use a simple split strategy here.
-    
-    // const sendSafe = async (content) => {
-    //   if (content.length < 2000) {
-    //     await channel.send(content);
-    //   } else {
-    //     // Simple chunking by newline if message is huge
-    //     const chunks = content.match(/[\s\S]{1,1900}(?=\n|$)/g) || [];
-    //     for (const chunk of chunks) {
-    //       await channel.send(chunk);
-    //     }
-    //   }
-    // };
 
     const embed = new EmbedBuilder()
       .setColor(0xFEFE92)
       .setDescription(
         `${rosterMsg + changesMsg}`
-      )
+      );
 
     await channel.send({
       embeds: [embed],
     });
-
-    // await sendSafe(rosterMsg);
-    // await sendSafe(changesMsg);
 
     console.log('  ✅ Discord summary sent.');
 
