@@ -29,6 +29,7 @@ const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * DAYS_WE_CHECK;
 const WEEKLY_TOP_3_ROLE_ID = '1485778453394489415';
 const WEEKLY_TOP_10_ROLE_ID = '1485778538459173024';
 const WEEKLY_TOP_25_ROLE_ID = '1485778597397528747';
+const WEEKLY_TOP_50_ROLE_ID = '1486349087170363492';
 
 const SEVEN_DAYS_MS = 1000 * 60 * 60 * 24 * 7;
         
@@ -185,18 +186,21 @@ async function manageWeeklyRoles(guild, weeklyMentionCount) {
   const cut3 = 3;
   const cut10 = 10;
   const cut25 = 25;
+  const cut50 = 50;
 
   // Start from index 0 for all tiers so roles stack downward
   const top3Ids = new Set(weeklyActive.slice(0, cut3).map(m => m.userId));
   const top10Ids = new Set(weeklyActive.slice(0, cut10).map(m => m.userId));
   const top25Ids = new Set(weeklyActive.slice(0, cut25).map(m => m.userId));
+  const top50Ids = new Set(weeklyActive.slice(0, cut50).map(m => m.userId));
 
   console.log(`  Weekly Active: ${totalActive} | Top 3: ${top3Ids.size} | Top 10: ${top10Ids.size} | Top 25: ${top25Ids.size}`);
 
   const roleDefinitions = [
     { id: WEEKLY_TOP_3_ROLE_ID, validSet: top3Ids, name: 'Top 3' },
     { id: WEEKLY_TOP_10_ROLE_ID, validSet: top10Ids, name: 'Top 10' },
-    { id: WEEKLY_TOP_25_ROLE_ID, validSet: top25Ids, name: 'Top 25' }
+    { id: WEEKLY_TOP_25_ROLE_ID, validSet: top25Ids, name: 'Top 25' },
+    { id: WEEKLY_TOP_50_ROLE_ID, validSet: top50Ids, name: 'Top 50' }
   ];
 
   // Apply & Remove Roles
