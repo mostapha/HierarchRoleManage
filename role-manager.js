@@ -22,7 +22,7 @@ const PROTECTED_ROLES_IDS = process.env.PROTECTED_ROLES_IDS.split(',');
 // Special roles: Don't compete for top 30 spots, but get Hierarch if they're top 30 caliber
 const SPECIAL_ROLES_IDS = process.env.SPECIAL_ROLES_IDS.split(',');
 
-const TOP_COUNT = 40;
+const TOP_COUNT = 20;
 const DAYS_WE_CHECK = 60;
 const TWO_MONTHS_MS = 1000 * 60 * 60 * 24 * DAYS_WE_CHECK;
 
